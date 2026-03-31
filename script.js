@@ -1,14 +1,10 @@
-// ===== NAVBAR SCROLL EFFECT =====
+// ===== NAVBAR =====
 const navbar = document.getElementById('navbar');
 window.addEventListener('scroll', () => {
-    if (window.scrollY > 60) {
-        navbar.classList.add('scrolled');
-    } else {
-        navbar.classList.remove('scrolled');
-    }
+    navbar.classList.toggle('scrolled', window.scrollY > 60);
 });
 
-// ===== MOBILE NAV TOGGLE =====
+// ===== MOBILE NAV =====
 const navToggle = document.getElementById('navToggle');
 const navLinks = document.getElementById('navLinks');
 
@@ -17,7 +13,6 @@ navToggle.addEventListener('click', () => {
     navLinks.classList.toggle('active');
 });
 
-// Close mobile nav on link click
 navLinks.querySelectorAll('a').forEach(link => {
     link.addEventListener('click', () => {
         navToggle.classList.remove('active');
@@ -26,53 +21,36 @@ navLinks.querySelectorAll('a').forEach(link => {
 });
 
 // ===== SCROLL ANIMATIONS =====
-const observerOptions = {
-    root: null,
-    rootMargin: '0px',
-    threshold: 0.15
-};
-
 const observer = new IntersectionObserver((entries) => {
     entries.forEach(entry => {
         if (entry.isIntersecting) {
             entry.target.classList.add('visible');
         }
     });
-}, observerOptions);
+}, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
 
-// Observe timeline items
-document.querySelectorAll('.timeline-item').forEach(item => {
-    observer.observe(item);
-});
-
-// Fade-up elements
-document.querySelectorAll('.info-card, .solution-card, .track-card, .tech-step, .sdg-item').forEach(el => {
+document.querySelectorAll(
+    '.product-showcase, .service-card, .customer-card, .impact-stat, .target-item, .about-geography, .about-sdgs'
+).forEach((el, i) => {
     el.classList.add('fade-up');
+    // Stagger siblings
+    const siblings = el.parentElement.children;
+    const index = Array.from(siblings).indexOf(el);
+    if (index <= 3) el.classList.add('fade-up-delay-' + (index % 4));
     observer.observe(el);
 });
 
 // ===== COUNTER ANIMATION =====
 function animateCounter(el, target) {
     const duration = 2000;
-    const start = 0;
-    const startTime = performance.now();
+    const start = performance.now();
 
-    function update(currentTime) {
-        const elapsed = currentTime - startTime;
-        const progress = Math.min(elapsed / duration, 1);
-        // Ease out cubic
+    function update(now) {
+        const progress = Math.min((now - start) / duration, 1);
         const eased = 1 - Math.pow(1 - progress, 3);
-        const current = Math.floor(start + (target - start) * eased);
-
-        if (target >= 1000) {
-            el.textContent = current.toLocaleString() + '+';
-        } else {
-            el.textContent = current + '+';
-        }
-
-        if (progress < 1) {
-            requestAnimationFrame(update);
-        }
+        const current = Math.floor(target * eased);
+        el.textContent = (target >= 1000 ? current.toLocaleString() : current) + '+';
+        if (progress < 1) requestAnimationFrame(update);
     }
 
     requestAnimationFrame(update);
@@ -82,25 +60,40 @@ const counterObserver = new IntersectionObserver((entries) => {
     entries.forEach(entry => {
         if (entry.isIntersecting && !entry.target.dataset.animated) {
             entry.target.dataset.animated = 'true';
-            const target = parseInt(entry.target.dataset.target);
-            animateCounter(entry.target, target);
+            animateCounter(entry.target, parseInt(entry.target.dataset.target));
         }
     });
 }, { threshold: 0.5 });
 
-document.querySelectorAll('[data-target]').forEach(el => {
-    counterObserver.observe(el);
-});
+document.querySelectorAll('[data-target]').forEach(el => counterObserver.observe(el));
 
-// ===== SMOOTH SCROLL FOR ANCHOR LINKS =====
+// ===== SMOOTH SCROLL =====
 document.querySelectorAll('a[href^="#"]').forEach(anchor => {
     anchor.addEventListener('click', function(e) {
         e.preventDefault();
         const target = document.querySelector(this.getAttribute('href'));
         if (target) {
-            const offset = 80;
-            const top = target.getBoundingClientRect().top + window.pageYOffset - offset;
-            window.scrollTo({ top, behavior: 'smooth' });
+            window.scrollTo({
+                top: target.getBoundingClientRect().top + window.pageYOffset - 80,
+                behavior: 'smooth'
+            });
         }
     });
 });
+
+// ===== USSD ANIMATION REPLAY ON SCROLL =====
+const ussdObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+        if (entry.isIntersecting) {
+            const lines = entry.target.querySelectorAll('.ussd-line');
+            lines.forEach(line => {
+                line.style.animation = 'none';
+                line.offsetHeight; // trigger reflow
+                line.style.animation = '';
+            });
+        }
+    });
+}, { threshold: 0.3 });
+
+const ussdScreen = document.querySelector('.ussd-screen');
+if (ussdScreen) ussdObserver.observe(ussdScreen);
