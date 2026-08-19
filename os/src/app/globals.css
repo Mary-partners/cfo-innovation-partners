@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans:
+    "DM Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+
+  /* CFOIP brand tokens — see /docs/product-spec.md "Visual system" */
+  --color-navy-900: #071a33;
+  --color-navy-700: #12345a;
+  --color-gold-500: #c99a2e;
+  --color-gold-300: #e4c56a;
+  --color-warm-white: #f8f7f3;
+  --color-slate-text: #334155;
+
+  /* Semantic status colours — chosen to hold WCAG 2.2 AA contrast on
+     var(--color-warm-white) and on white. */
+  --color-success: #15803d;
+  --color-success-bg: #ecfdf3;
+  --color-warning: #b45309;
+  --color-warning-bg: #fffaeb;
+  --color-danger: #b91c1c;
+  --color-danger-bg: #fef2f2;
+  --color-info: #1d4ed8;
+  --color-info-bg: #eff6ff;
+}
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  background-color: var(--color-warm-white);
+  color: var(--color-slate-text);
+}
+
+/* Visible focus ring for keyboard navigation everywhere — see /docs/qa-plan.md
+   accessibility checks. */
+:focus-visible {
+  outline: 2px solid var(--color-gold-500);
+  outline-offset: 2px;
+}

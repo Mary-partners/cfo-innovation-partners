@@ -1,0 +1,42 @@
+name: CFOIP OS CI
+
+on:
+  push:
+    branches: ["main"]
+    paths: ["os/**", ".github/workflows/os-ci.yml"]
+  pull_request:
+    paths: ["os/**", ".github/workflows/os-ci.yml"]
+
+defaults:
+  run:
+    working-directory: os
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: os/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate Prisma schema
+        run: npx prisma validate
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build

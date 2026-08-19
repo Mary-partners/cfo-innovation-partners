@@ -128,6 +128,13 @@ img { max-width: 100%; display: block; }
     color: rgba(255,255,255,0.85); transition: color 0.3s ease;
 }
 .nav-links a:hover { color: var(--white); }
+.nav-os-link {
+    padding: 8px 18px !important; border-radius: 50px;
+    border: 1.5px solid rgba(255,255,255,0.5);
+    font-weight: 600 !important;
+}
+.nav-os-link:hover { border-color: var(--white); }
+.navbar.scrolled .nav-os-link { border-color: var(--green-600); }
 .nav-cta {
     padding: 10px 24px !important; border-radius: 50px;
     background: rgba(255,255,255,0.15); backdrop-filter: blur(4px);

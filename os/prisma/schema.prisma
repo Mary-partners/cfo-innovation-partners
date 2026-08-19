@@ -1,0 +1,190 @@
+// CFOIP OS — Prisma schema
+// Phase 0 / Phase 1 slice only. See /docs/data-model.md for the full target
+// entity model (sections 20 of the product spec) and what remains to be added.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+// Internal (staff) roles — see /docs/security.md §"Roles" for the authority
+// matrix. Client-facing roles (CLIENT_ADMIN, CLIENT_COLLABORATOR) are
+// deferred to Phase 2 (client portal) and intentionally not modelled yet.
+enum OrgRole {
+  MANAGING_PARTNER
+  PRACTICE_ADMIN
+  PORTFOLIO_LEAD
+  RELATIONSHIP_MANAGER
+  SERVICE_LEAD
+  PREPARER_ANALYST
+  INDEPENDENT_REVIEWER
+  FINANCE_BILLING
+  READ_ONLY_AUDITOR
+}
+
+enum ClientLifecycleStage {
+  PROSPECT
+  ONBOARDING
+  ACTIVE
+  WATCH
+  AT_RISK
+  RENEWING
+  PAUSED
+  OFFBOARDING
+  OFFBOARDED
+}
+
+enum ClientHealthStatus {
+  HEALTHY
+  WATCH
+  AT_RISK
+}
+
+// Service portfolio bucket a client primarily sits in. Modelled as an enum
+// for Phase 1; becomes a configurable ServicePackage entity in Phase 2+
+// (see /docs/decision-log.md).
+enum ServiceBucket {
+  MONTHLY_CFO
+  BOOKKEEPING_OVERSIGHT
+  CASH_FLOW_ADVISORY
+  INVESTOR_READINESS
+  AD_HOC_PROJECTS
+}
+
+enum AuditAction {
+  USER_SIGNED_UP
+  USER_SIGNED_IN
+  MEMBERSHIP_ROLE_CHANGED
+  MEMBERSHIP_DEACTIVATED
+  CLIENT_CREATED
+  CLIENT_UPDATED
+  CLIENT_LIFECYCLE_CHANGED
+}
+
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
+
+/// A single practice tenant. CFOIP runs one organization; the model stays
+/// multi-tenant-shaped so a second practice could be onboarded without a
+/// schema change.
+model Organization {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  slug      String   @unique
+  currency  String   @default("KES")
+  timezone  String   @default("Africa/Nairobi")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships Membership[]
+  clients     Client[]
+  auditEvents AuditEvent[]
+
+  @@map("organizations")
+}
+
+/// Links a Supabase auth user to an organization with an internal role.
+/// `userId` is the Supabase `auth.users.id` (uuid) — there is no local
+/// `users` table; profile fields beyond email are looked up from Supabase
+/// auth metadata at read time to avoid a second source of truth.
+model Membership {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  userId         String   @db.Uuid
+  email          String
+  displayName    String?
+  role           OrgRole
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  portfolioLeadFor     Client[] @relation("PortfolioLead")
+  relationshipOwnerFor Client[] @relation("RelationshipOwner")
+  auditEvents          AuditEvent[]
+
+  @@unique([organizationId, userId])
+  @@index([organizationId, role])
+  @@map("memberships")
+}
+
+model Client {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+
+  name         String
+  tradingName  String?
+  country      String
+  currency     String @default("KES")
+
+  serviceBucket   ServiceBucket
+  lifecycleStage  ClientLifecycleStage @default(PROSPECT)
+  healthScore     Int?
+  healthStatus    ClientHealthStatus?
+
+  portfolioLeadId     String? @db.Uuid
+  relationshipOwnerId String? @db.Uuid
+
+  reportingYearEnd    String? // e.g. "12-31"
+  engagementStartDate DateTime?
+  engagementEndDate   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  portfolioLead       Membership?  @relation("PortfolioLead", fields: [portfolioLeadId], references: [id])
+  relationshipOwner   Membership?  @relation("RelationshipOwner", fields: [relationshipOwnerId], references: [id])
+
+  contacts ClientContact[]
+
+  @@index([organizationId, lifecycleStage])
+  @@index([organizationId, serviceBucket])
+  @@map("clients")
+}
+
+model ClientContact {
+  id        String   @id @default(uuid()) @db.Uuid
+  clientId  String   @db.Uuid
+  name      String
+  email     String
+  phone     String?
+  role      String?
+  isPrimary Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@map("client_contacts")
+}
+
+/// Append-only audit trail. Never update or delete rows from this table at
+/// the application layer — see /docs/security.md.
+model AuditEvent {
+  id                String      @id @default(uuid()) @db.Uuid
+  organizationId    String      @db.Uuid
+  actorMembershipId String?     @db.Uuid
+  actorLabel        String? // used for system/automation events with no membership
+  action            AuditAction
+  targetType        String
+  targetId          String?
+  metadata          Json?
+  createdAt         DateTime    @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actor        Membership?  @relation(fields: [actorMembershipId], references: [id])
+
+  @@index([organizationId, createdAt])
+  @@map("audit_events")
+}
