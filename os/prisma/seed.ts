@@ -8,7 +8,14 @@
  */
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client";
-import type { ServiceBucket, ClientLifecycleStage, ClientHealthStatus } from "../src/generated/prisma/enums";
+import type {
+  ServiceBucket,
+  ClientLifecycleStage,
+  ClientHealthStatus,
+  RecurrenceType,
+  TaskStatus,
+} from "../src/generated/prisma/enums";
+import { computePeriodEnd, computeTaskDueDate } from "../src/lib/workflow/period";
 
 const connectionString = process.env.DIRECT_URL ?? process.env.DATABASE_URL;
 if (!connectionString) {
@@ -43,6 +50,76 @@ const CLIENTS: SeedClient[] = [
   { name: "Jenga Construction Partners", country: "Kenya", currency: "KES", serviceBucket: "AD_HOC_PROJECTS", lifecycleStage: "ACTIVE", healthScore: 69, healthStatus: "WATCH", contact: { name: "Samuel Kimani", email: "samuel@jengaconstruction.example", role: "MD" } },
   { name: "Kito Renewable Energy", country: "Rwanda", currency: "USD", serviceBucket: "AD_HOC_PROJECTS", lifecycleStage: "PAUSED", healthScore: 55, healthStatus: "WATCH", contact: { name: "Aline Uwase", email: "aline@kitoenergy.example", role: "Finance Lead" } },
   { name: "Lulu Marketplace Kenya", country: "Kenya", currency: "KES", serviceBucket: "MONTHLY_CFO", lifecycleStage: "PROSPECT", healthScore: null, healthStatus: null, contact: { name: "Faith Wambui", email: "faith@lulumarketplace.example", role: "Founder" } },
+];
+
+type SeedTaskTemplate = { title: string; order: number; relativeDueDays: number };
+type SeedTemplate = {
+  name: string;
+  description: string;
+  serviceBucket: ServiceBucket;
+  recurrence: RecurrenceType;
+  tasks: SeedTaskTemplate[];
+};
+
+const TEMPLATES: SeedTemplate[] = [
+  {
+    name: "Monthly Management Accounts",
+    description: "Close the books, prepare management accounts and deliver the pack.",
+    serviceBucket: "MONTHLY_CFO",
+    recurrence: "MONTHLY",
+    tasks: [
+      { title: "Request source data from client", order: 0, relativeDueDays: 1 },
+      { title: "Confirm bookkeeping close", order: 1, relativeDueDays: 5 },
+      { title: "Prepare management accounts", order: 2, relativeDueDays: 10 },
+      { title: "Internal quality review", order: 3, relativeDueDays: 12 },
+      { title: "Release pack to client", order: 4, relativeDueDays: 15 },
+    ],
+  },
+  {
+    name: "Quarterly Board Pack",
+    description: "Prepare and deliver the quarterly board reporting pack.",
+    serviceBucket: "INVESTOR_READINESS",
+    recurrence: "QUARTERLY",
+    tasks: [
+      { title: "Collect quarterly financials", order: 0, relativeDueDays: 5 },
+      { title: "Draft board narrative and KPIs", order: 1, relativeDueDays: 20 },
+      { title: "Partner review", order: 2, relativeDueDays: 25 },
+      { title: "Send pack to board", order: 3, relativeDueDays: 30 },
+    ],
+  },
+];
+
+type SeedInstance = {
+  clientName: string;
+  templateName: string;
+  periodStart: Date;
+  /** Overrides the default NOT_STARTED status, keyed by task index in the template's task list. */
+  taskStatusOverrides?: Record<number, TaskStatus>;
+};
+
+const INSTANCES: SeedInstance[] = [
+  {
+    // Fully delivered — a healthy, on-time example.
+    clientName: "Amboseli Fresh Foods Ltd",
+    templateName: "Monthly Management Accounts",
+    periodStart: new Date(Date.UTC(2026, 6, 1)),
+    taskStatusOverrides: { 0: "DELIVERED", 1: "DELIVERED", 2: "DELIVERED", 3: "APPROVED", 4: "DELIVERED" },
+  },
+  {
+    // Behind schedule — several tasks left NOT_STARTED past their due date,
+    // which the Calendar/Work pages surface as overdue.
+    clientName: "Baraka Logistics Group",
+    templateName: "Monthly Management Accounts",
+    periodStart: new Date(Date.UTC(2026, 7, 1)),
+    taskStatusOverrides: { 0: "DELIVERED", 1: "DELIVERED", 2: "IN_PROGRESS" },
+  },
+  {
+    // Mid-quarter, also running behind.
+    clientName: "Highland Coffee Traders",
+    templateName: "Quarterly Board Pack",
+    periodStart: new Date(Date.UTC(2026, 6, 1)),
+    taskStatusOverrides: { 0: "DELIVERED", 1: "IN_PROGRESS" },
+  },
 ];
 
 async function main() {
@@ -103,6 +180,78 @@ async function main() {
   }
 
   console.log(`Seeded ${CLIENTS.length} demo clients into organization "${org.name}".`);
+
+  const templateIdByName = new Map<string, string>();
+  for (const t of TEMPLATES) {
+    const existing = await db.workflowTemplate.findFirst({
+      where: { organizationId: org.id, name: t.name },
+    });
+    const template = existing
+      ? existing
+      : await db.workflowTemplate.create({
+          data: {
+            organizationId: org.id,
+            name: t.name,
+            description: t.description,
+            serviceBucket: t.serviceBucket,
+            recurrence: t.recurrence,
+          },
+        });
+    templateIdByName.set(t.name, template.id);
+
+    const taskTemplateCount = await db.taskTemplate.count({
+      where: { workflowTemplateId: template.id },
+    });
+    if (taskTemplateCount === 0) {
+      await db.taskTemplate.createMany({
+        data: t.tasks.map((task) => ({
+          workflowTemplateId: template.id,
+          title: task.title,
+          order: task.order,
+          relativeDueDays: task.relativeDueDays,
+        })),
+      });
+    }
+  }
+  console.log(`Seeded ${TEMPLATES.length} workflow templates.`);
+
+  let instancesCreated = 0;
+  for (const seedInstance of INSTANCES) {
+    const client = await db.client.findFirst({
+      where: { organizationId: org.id, name: seedInstance.clientName },
+    });
+    const template = TEMPLATES.find((t) => t.name === seedInstance.templateName);
+    const templateId = templateIdByName.get(seedInstance.templateName);
+    if (!client || !template || !templateId) continue;
+
+    const alreadyExists = await db.workflowInstance.findFirst({
+      where: { clientId: client.id, workflowTemplateId: templateId, periodStart: seedInstance.periodStart },
+    });
+    if (alreadyExists) continue;
+
+    const periodEnd = computePeriodEnd(seedInstance.periodStart, template.recurrence);
+    await db.workflowInstance.create({
+      data: {
+        organizationId: org.id,
+        clientId: client.id,
+        workflowTemplateId: templateId,
+        name: template.name,
+        serviceBucket: template.serviceBucket,
+        periodStart: seedInstance.periodStart,
+        periodEnd,
+        tasks: {
+          create: template.tasks.map((task, index) => ({
+            title: task.title,
+            order: task.order,
+            dueDate: computeTaskDueDate(seedInstance.periodStart, task.relativeDueDays),
+            status: seedInstance.taskStatusOverrides?.[index] ?? "NOT_STARTED",
+          })),
+        },
+      },
+    });
+    instancesCreated += 1;
+  }
+  console.log(`Seeded ${instancesCreated} workflow instances.`);
 }
 
 main()

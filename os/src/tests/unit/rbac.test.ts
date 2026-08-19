@@ -29,6 +29,23 @@ describe("rbac.can", () => {
       expect(ROLE_LABELS[role]).toBeTruthy();
     }
   });
+
+  it("lets a Preparer/Analyst update task status but not manage templates or assign", () => {
+    expect(can(OrgRole.PREPARER_ANALYST, "task:updateStatus")).toBe(true);
+    expect(can(OrgRole.PREPARER_ANALYST, "workflow:manageTemplates")).toBe(false);
+    expect(can(OrgRole.PREPARER_ANALYST, "task:assign")).toBe(false);
+  });
+
+  it("lets a Service Lead manage templates, instantiate work, and assign tasks", () => {
+    expect(can(OrgRole.SERVICE_LEAD, "workflow:manageTemplates")).toBe(true);
+    expect(can(OrgRole.SERVICE_LEAD, "workflow:instantiate")).toBe(true);
+    expect(can(OrgRole.SERVICE_LEAD, "task:assign")).toBe(true);
+  });
+
+  it("withholds workflow permissions from Finance/Billing and the auditor", () => {
+    expect(can(OrgRole.FINANCE_BILLING, "workflow:instantiate")).toBe(false);
+    expect(can(OrgRole.READ_ONLY_AUDITOR, "task:updateStatus")).toBe(false);
+  });
 });
 
 describe("rbac.canReview — segregation of duties", () => {

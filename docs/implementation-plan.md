@@ -23,27 +23,66 @@ roadmap (`os/src/app/(app)/settings/page.tsx`).
 
 Shipped:
 - [x] Client portfolio list (`/clients`) with create-client form, RBAC-gated
-- [x] Client 360 — Overview tab only; other tabs listed as upcoming on the
-      page itself (Company profile, Engagement, Onboarding, Services, Work,
-      Requests, Deliverables, Documents, Meetings, Financial operations,
-      Billing, Health & risk, Activity timeline)
+- [x] Client 360 — Overview tab and a real Work tab (workflow instances for
+      that client); remaining tabs listed as upcoming on the page itself
+      (Company profile, Engagement, Onboarding, Services, Requests,
+      Deliverables, Documents, Meetings, Financial operations, Billing,
+      Health & risk, Activity timeline)
 - [x] Command Centre — live counts (total/onboarding/active/watch+at-risk),
       clients by service bucket, recently updated clients
 - [x] Team & role management (`/settings/team`) — the self-serve piece that
       makes sign-up usable without a separate invite system
+- [x] **Workflow-template engine** (`/templates`, `/templates/[id]`) —
+      `WorkflowTemplate` + `TaskTemplate`, RBAC-gated creation
+      (`workflow:manageTemplates`). No versioning or dependency graph yet —
+      see "Simplifications" below.
+- [x] **Recurring/one-off work** (`/work`, `/work/[id]`) — instantiate a
+      template for a client and period (`workflow:instantiate`); task
+      status and assignee are editable inline (`task:updateStatus`,
+      `task:assign`). Progress and "overdue" are computed, not stored — see
+      `src/lib/workflow/status.ts`.
+- [x] **Deadlines calendar** (`/calendar`) — every open task across the
+      portfolio, bucketed into Overdue / 7 / 14 / 30 days / Later.
+- [x] Seed data extended: 2 workflow templates, 3 workflow instances across
+      3 clients with realistic status spread (one fully delivered, two
+      running behind schedule with genuinely overdue tasks) — see
+      `prisma/seed.ts`.
 
-Not yet built (placeholder pages exist at these routes today, labelled
-"Ships Phase 1" in-product):
-- [ ] Workflow-template engine (phase/job/task/checklist hierarchy,
-      recurrence, dependencies) — `/work`, `/templates`
-- [ ] Deadlines calendar — `/calendar`
+Not yet built (placeholder page exists at this route, labelled "Ships
+Phase 1" in-product):
 - [ ] Internal document storage — `/documents`
 
-New entities this phase needs (not yet in `schema.prisma`): `Engagement`,
-`ServicePackage` (replacing the `ServiceBucket` enum), `WorkflowTemplate` +
-version, `PhaseTemplate`, `TaskTemplate`, `ChecklistTemplate`,
-`WorkflowInstance`, `Job`, `Task`, `Dependency`, `ChecklistResponse`,
-`TaskEvidence`, `Document`, `DocumentVersion`.
+### Simplifications taken to ship this slice (not silent — tracked here)
+
+- **No dependency graph between tasks.** The brief asks for blocking rules
+  and parallel branches; this slice has a flat, ordered task list per
+  workflow instance. Real enough to run recurring monthly/quarterly work
+  end to end; add dependencies when a real template needs "don't start B
+  until A is done" enforced rather than just implied by task order.
+- **No template versioning.** Editing a `WorkflowTemplate`'s tasks changes
+  what future instantiations create; past `WorkflowInstance`/`Task` rows
+  already copied their values at creation time (see `/docs/data-model.md`),
+  so history is safe — but there's no `WorkflowTemplateVersion` record of
+  *which* edit produced *which* instance. Add if template change history
+  itself becomes something CFOIP needs to audit.
+- **Default assignee role on `TaskTemplate` is unused.** The schema field
+  exists (`defaultAssigneeRole`); instantiation currently leaves every task
+  unassigned for a human to pick up from `/work/[id]`. Wiring
+  role-based auto-assignment needs a rule for *which* person holding that
+  role gets it (round-robin? least-loaded? — a capacity-planning question
+  that's Phase 2 scope), so it's left manual for now rather than guessed.
+- **Calendar math is UTC-calendar, not organization-timezone-aware.** See
+  the comment in `src/lib/workflow/period.ts`. Fine for Africa/Nairobi
+  (UTC+3, no DST); revisit before onboarding a client whose reporting
+  calendar depends on a timezone far enough from UTC for a day boundary to
+  shift.
+
+New entities this phase still needs beyond what's built (not yet in
+`schema.prisma`): `Engagement`, `ServicePackage` (replacing the
+`ServiceBucket` enum — see `/docs/decision-log.md`), `ChecklistTemplate` +
+`ChecklistResponse` (per-task checklists, distinct from the task itself),
+`TaskEvidence`, `Document`, `DocumentVersion`, `WorkflowTemplateVersion`,
+`TaskDependency`.
 
 ## Phase 2 — Service control — **planned**
 
@@ -86,8 +125,9 @@ and a real incident-response/backup runbook are the gating items.
 
 ## Immediate next slice (recommendation)
 
-If picking this back up, the highest-value next piece is the **workflow-
-template engine** (Phase 1's remaining item) — it's the dependency for
-Calendar, Documents-per-deliverable, and eventually Quality and Requests.
-Building it before those means they're built against a real workflow
-concept instead of a guessed one.
+Phase 1's only remaining item is **internal document storage**
+(`/documents`) — Supabase Storage-backed, with `Document`/`DocumentVersion`
+metadata in Postgres, short-lived signed URLs (never public bucket URLs),
+and virus-scanning hooked in per `/docs/security.md`. After that, Phase 1 is
+complete and Phase 2 (client portal, Quality, Requests) can start against a
+real workflow/task concept instead of a guessed one.

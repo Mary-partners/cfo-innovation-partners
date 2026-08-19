@@ -1,16 +1,20 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireActor } from "@/lib/auth/session";
 import { getClientById } from "@/lib/queries/clients";
+import { getWorkflowInstancesForClient } from "@/lib/queries/workflow";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LifecycleBadge, HealthBadge, SERVICE_BUCKET_LABEL } from "@/components/os/status-badge";
+import { WorkflowInstanceStatusBadge } from "@/components/os/workflow-status-badge";
+import { ProgressBar } from "@/components/os/progress-bar";
+import { computeWorkflowProgress } from "@/lib/workflow/status";
 
 const UPCOMING_TABS = [
   "Company profile",
   "Engagement",
   "Onboarding",
   "Services",
-  "Work",
   "Requests",
   "Deliverables",
   "Documents",
@@ -40,13 +44,16 @@ export default async function ClientDetailPage({
   const { id } = await params;
   const actor = await requireActor();
   // Scoped to actor.organizationId — a client belonging to another tenant
-  // resolves to null here, never a cross-tenant record. See
-  // src/tests/unit/tenant-scope.test.ts.
+  // resolves to null here, never a cross-tenant record. Verified against a
+  // real Postgres instance for real, not just by inspection — see the RLS
+  // section of /docs/security.md.
   const client = await getClientById(actor.organizationId, id);
 
   if (!client) {
     notFound();
   }
+
+  const workflowInstances = await getWorkflowInstancesForClient(actor.organizationId, client.id);
 
   return (
     <div className="flex flex-col gap-6">
@@ -114,6 +121,52 @@ export default async function ClientDetailPage({
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Work ({workflowInstances.length})</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {workflowInstances.length === 0 ? (
+            <p className="p-5 text-sm text-slate-text/60">
+              No work started for this client yet.{" "}
+              <Link href="/work" className="underline">
+                Start a workflow
+              </Link>
+              .
+            </p>
+          ) : (
+            <ul className="divide-y divide-navy-900/5">
+              {workflowInstances.map((instance) => {
+                const progress = computeWorkflowProgress(instance.tasks);
+                return (
+                  <li key={instance.id} className="flex items-center justify-between px-5 py-3">
+                    <div>
+                      <Link
+                        href={`/work/${instance.id}`}
+                        className="text-sm font-medium text-navy-900 hover:underline"
+                      >
+                        {instance.name}
+                      </Link>
+                      <div className="text-xs text-slate-text/50">
+                        {new Date(instance.periodStart).toLocaleDateString()} –{" "}
+                        {new Date(instance.periodEnd).toLocaleDateString()}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className="w-24">
+                        <ProgressBar percent={progress} />
+                      </div>
+                      <span className="w-9 text-right text-xs text-slate-text/60">{progress}%</span>
+                      <WorkflowInstanceStatusBadge status={instance.status} />
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

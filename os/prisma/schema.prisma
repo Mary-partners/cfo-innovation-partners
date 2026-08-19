@@ -67,6 +67,43 @@ enum AuditAction {
   CLIENT_CREATED
   CLIENT_UPDATED
   CLIENT_LIFECYCLE_CHANGED
+  WORKFLOW_TEMPLATE_CREATED
+  TASK_TEMPLATE_ADDED
+  WORKFLOW_INSTANTIATED
+  TASK_STATUS_CHANGED
+  TASK_ASSIGNED
+}
+
+// How often a WorkflowTemplate's work recurs. Drives the default
+// periodStart/periodEnd math when a WorkflowInstance is created — see
+// src/lib/workflow/period.ts.
+enum RecurrenceType {
+  ONE_OFF
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  ANNUAL
+}
+
+enum WorkflowInstanceStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+// "Overdue" is deliberately not a stored status — it's derived from
+// (dueDate < now && status not in DELIVERED) at read time, so a task can
+// never go stale in an "overdue" state after someone fixes the due date.
+// See computeIsOverdue() in src/lib/workflow/status.ts.
+enum TaskStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  BLOCKED
+  AWAITING_CLIENT
+  UNDER_REVIEW
+  APPROVED
+  DELIVERED
 }
 
 // ---------------------------------------------------------------------------
@@ -85,9 +122,11 @@ model Organization {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  memberships Membership[]
-  clients     Client[]
-  auditEvents AuditEvent[]
+  memberships       Membership[]
+  clients           Client[]
+  auditEvents       AuditEvent[]
+  workflowTemplates WorkflowTemplate[]
+  workflowInstances WorkflowInstance[]
 
   @@map("organizations")
 }
@@ -109,9 +148,10 @@ model Membership {
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
-  portfolioLeadFor     Client[] @relation("PortfolioLead")
-  relationshipOwnerFor Client[] @relation("RelationshipOwner")
+  portfolioLeadFor     Client[]     @relation("PortfolioLead")
+  relationshipOwnerFor Client[]     @relation("RelationshipOwner")
   auditEvents          AuditEvent[]
+  assignedTasks        Task[]       @relation("TaskAssignee")
 
   @@unique([organizationId, userId])
   @@index([organizationId, role])
@@ -119,18 +159,18 @@ model Membership {
 }
 
 model Client {
-  id             String   @id @default(uuid()) @db.Uuid
-  organizationId String   @db.Uuid
+  id             String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
 
-  name         String
-  tradingName  String?
-  country      String
-  currency     String @default("KES")
+  name        String
+  tradingName String?
+  country     String
+  currency    String  @default("KES")
 
-  serviceBucket   ServiceBucket
-  lifecycleStage  ClientLifecycleStage @default(PROSPECT)
-  healthScore     Int?
-  healthStatus    ClientHealthStatus?
+  serviceBucket  ServiceBucket
+  lifecycleStage ClientLifecycleStage @default(PROSPECT)
+  healthScore    Int?
+  healthStatus   ClientHealthStatus?
 
   portfolioLeadId     String? @db.Uuid
   relationshipOwnerId String? @db.Uuid
@@ -142,11 +182,12 @@ model Client {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  portfolioLead       Membership?  @relation("PortfolioLead", fields: [portfolioLeadId], references: [id])
-  relationshipOwner   Membership?  @relation("RelationshipOwner", fields: [relationshipOwnerId], references: [id])
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  portfolioLead     Membership?  @relation("PortfolioLead", fields: [portfolioLeadId], references: [id])
+  relationshipOwner Membership?  @relation("RelationshipOwner", fields: [relationshipOwnerId], references: [id])
 
-  contacts ClientContact[]
+  contacts          ClientContact[]
+  workflowInstances WorkflowInstance[]
 
   @@index([organizationId, lifecycleStage])
   @@index([organizationId, serviceBucket])
@@ -187,4 +228,100 @@ model AuditEvent {
 
   @@index([organizationId, createdAt])
   @@map("audit_events")
+}
+
+/// A reusable recipe for recurring or one-off work (e.g. "Monthly
+/// Management Accounts", "Quarterly Board Pack"). Holds TaskTemplates;
+/// instantiated per client per period into a WorkflowInstance. Editing a
+/// template never rewrites history — WorkflowInstance/Task copy the values
+/// they need at creation time (see /docs/data-model.md).
+model WorkflowTemplate {
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @db.Uuid
+  name           String
+  description    String?
+  serviceBucket  ServiceBucket
+  recurrence     RecurrenceType
+  isActive       Boolean        @default(true)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization  Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  taskTemplates TaskTemplate[]
+  instances     WorkflowInstance[]
+
+  @@index([organizationId, serviceBucket])
+  @@map("workflow_templates")
+}
+
+/// One task blueprint within a WorkflowTemplate. `relativeDueDays` is days
+/// from the owning WorkflowInstance's periodStart — e.g. 5 means "due 5
+/// days into the period" — so the same template produces correctly-dated
+/// tasks regardless of which period it's instantiated for.
+model TaskTemplate {
+  id                  String   @id @default(uuid()) @db.Uuid
+  workflowTemplateId  String   @db.Uuid
+  title               String
+  description         String?
+  order               Int      @default(0)
+  relativeDueDays     Int      @default(0)
+  defaultAssigneeRole OrgRole?
+  createdAt           DateTime @default(now())
+
+  workflowTemplate WorkflowTemplate @relation(fields: [workflowTemplateId], references: [id], onDelete: Cascade)
+
+  @@index([workflowTemplateId, order])
+  @@map("task_templates")
+}
+
+/// One instantiation of a WorkflowTemplate for one Client covering one
+/// period (e.g. "Monthly Management Accounts — March 2026" for Amboseli
+/// Fresh Foods). `name`/`serviceBucket` are copied from the template at
+/// creation time rather than joined live, so renaming or archiving a
+/// template never changes the record of what was actually delivered.
+/// `workflowTemplateId` is nullable — a lead can also open a one-off
+/// workflow with no reusable template behind it.
+model WorkflowInstance {
+  id                 String                 @id @default(uuid()) @db.Uuid
+  organizationId     String                 @db.Uuid
+  clientId           String                 @db.Uuid
+  workflowTemplateId String?                @db.Uuid
+  name               String
+  serviceBucket      ServiceBucket
+  periodStart        DateTime
+  periodEnd          DateTime
+  status             WorkflowInstanceStatus @default(OPEN)
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client           Client            @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  workflowTemplate WorkflowTemplate? @relation(fields: [workflowTemplateId], references: [id], onDelete: SetNull)
+  tasks            Task[]
+
+  @@index([organizationId, status])
+  @@index([clientId, periodStart])
+  @@map("workflow_instances")
+}
+
+model Task {
+  id                   String     @id @default(uuid()) @db.Uuid
+  workflowInstanceId   String     @db.Uuid
+  title                String
+  description          String?
+  order                Int        @default(0)
+  status               TaskStatus @default(NOT_STARTED)
+  dueDate              DateTime
+  assigneeMembershipId String?    @db.Uuid
+  completedAt          DateTime?
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+
+  workflowInstance WorkflowInstance @relation(fields: [workflowInstanceId], references: [id], onDelete: Cascade)
+  assignee         Membership?      @relation("TaskAssignee", fields: [assigneeMembershipId], references: [id], onDelete: SetNull)
+
+  @@index([workflowInstanceId, order])
+  @@index([assigneeMembershipId])
+  @@index([dueDate])
+  @@map("tasks")
 }

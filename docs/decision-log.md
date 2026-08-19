@@ -99,6 +99,31 @@ today, not by the database. RLS protects other access paths. Closing that
 gap (routing the app's own queries through an RLS-aware connection) is real
 work, not a checkbox — tracked here rather than silently assumed done.
 
+## Workflow engine shipped flat, unversioned, with manual assignment
+
+Building the workflow-template engine (Phase 1) surfaced four places where
+the full brief asks for more than this slice builds: task dependencies/
+blocking rules, template version history, role-based auto-assignment, and
+timezone-aware period math. Each is a real, deliberate simplification, not
+an oversight — full reasoning for each is in `/docs/implementation-plan.md`
+"Simplifications taken to ship this slice" rather than duplicated here, but
+they're listed there precisely so a decision log reader knows to look:
+this slice runs real recurring monthly/quarterly work end to end, without
+those four things.
+
+## `task:updateStatus` is not scoped to "my own assigned tasks"
+
+**Decision**: any Preparer/Analyst can change the status of any task in the
+organization, not just tasks assigned to them.
+
+**Why**: adding "or the task is assigned to me" as an alternate check is a
+small code change, but there was no product signal yet for whether CFOIP
+wants that restriction (a small team might prefer anyone can pick up any
+task) versus wants it locked down (accountability). Shipped permissive;
+tightening later is a one-line change to `ROLE_PERMISSIONS` plus a
+`task.assigneeMembershipId === actor.membership.id` check in
+`updateTaskStatusAction` — not a schema change.
+
 ## No Playwright / E2E tests yet
 
 Deliberately not added half-configured against a fake auth session — see

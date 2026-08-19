@@ -17,7 +17,11 @@ export type Permission =
   | "membership:deactivate"
   | "audit:view"
   | "settings:manage"
-  | "billing:view"; // gated now; billing module ships Phase 3
+  | "billing:view" // gated now; billing module ships Phase 3
+  | "workflow:manageTemplates"
+  | "workflow:instantiate"
+  | "task:updateStatus"
+  | "task:assign";
 
 const ALL_INTERNAL_PERMISSIONS: Permission[] = [
   "client:view",
@@ -29,6 +33,10 @@ const ALL_INTERNAL_PERMISSIONS: Permission[] = [
   "audit:view",
   "settings:manage",
   "billing:view",
+  "workflow:manageTemplates",
+  "workflow:instantiate",
+  "task:updateStatus",
+  "task:assign",
 ];
 
 /**
@@ -48,6 +56,8 @@ const ROLE_PERMISSIONS: Record<OrgRole, ReadonlySet<Permission>> = {
     "membership:deactivate",
     "audit:view",
     "settings:manage",
+    "workflow:manageTemplates",
+    "workflow:instantiate",
   ]),
   [OrgRole.PORTFOLIO_LEAD]: new Set([
     "client:view",
@@ -55,6 +65,9 @@ const ROLE_PERMISSIONS: Record<OrgRole, ReadonlySet<Permission>> = {
     "client:edit",
     "membership:view",
     "billing:view",
+    "workflow:instantiate",
+    "task:updateStatus",
+    "task:assign",
   ]),
   [OrgRole.RELATIONSHIP_MANAGER]: new Set([
     "client:view",
@@ -65,8 +78,12 @@ const ROLE_PERMISSIONS: Record<OrgRole, ReadonlySet<Permission>> = {
     "client:view",
     "client:edit",
     "membership:view",
+    "workflow:manageTemplates",
+    "workflow:instantiate",
+    "task:updateStatus",
+    "task:assign",
   ]),
-  [OrgRole.PREPARER_ANALYST]: new Set(["client:view"]),
+  [OrgRole.PREPARER_ANALYST]: new Set(["client:view", "task:updateStatus"]),
   [OrgRole.INDEPENDENT_REVIEWER]: new Set(["client:view"]),
   [OrgRole.FINANCE_BILLING]: new Set(["client:view", "billing:view"]),
   [OrgRole.READ_ONLY_AUDITOR]: new Set(["client:view", "audit:view"]),

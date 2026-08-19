@@ -16,23 +16,27 @@ Implemented in `os/src/lib/auth/rbac.ts`, one file, one matrix
 | Role | Core authority (Phase 0/1 permissions) |
 |---|---|
 | Managing Partner | Everything |
-| Practice Administrator | Clients, team roles, settings, audit log — not billing |
-| Portfolio Lead / CFO | Clients (view/create/edit), billing visibility |
+| Practice Administrator | Clients, team roles, settings, audit log, workflow templates & instantiation — not billing, not task execution |
+| Portfolio Lead / CFO | Clients (view/create/edit), billing visibility, start work, update/assign tasks |
 | Client Relationship Manager | Clients (view/edit) |
-| Service Lead | Clients (view/edit) |
-| Preparer / Analyst | Clients (view only) |
+| Service Lead | Clients (view/edit), manage workflow templates, start work, update/assign tasks |
+| Preparer / Analyst | Clients (view only), update task status (their own delivery work) |
 | Independent Reviewer | Clients (view only) |
 | Finance / Billing | Clients (view), billing visibility |
 | Read-only / Auditor | Clients (view), audit log |
 
 The permission surface is intentionally small right now (`client:*`,
-`membership:*`, `audit:view`, `settings:manage`, `billing:view`) because
-that's all that's built. It grows with each phase — every new module adds
-its own permissions to the same matrix rather than inventing a parallel
-authorization mechanism. `billing:view` already exists in the matrix ahead
-of the Billing module (Phase 3) shipping, so the authority decision (who
-gets to see money) is made once and doesn't need revisiting when Billing
-lands.
+`membership:*`, `audit:view`, `settings:manage`, `billing:view`,
+`workflow:manageTemplates`, `workflow:instantiate`, `task:updateStatus`,
+`task:assign`) because that's all that's built. It grows with each phase —
+every new module adds its own permissions to the same matrix rather than
+inventing a parallel authorization mechanism. `billing:view` already exists
+in the matrix ahead of the Billing module (Phase 3) shipping, so the
+authority decision (who gets to see money) is made once and doesn't need
+revisiting when Billing lands. Note `task:updateStatus` is currently
+granted broadly to Preparer/Analyst rather than scoped to "only tasks
+assigned to me" — a real gap if CFOIP ever needs to stop analysts from
+touching each other's tasks; tracked in `/docs/decision-log.md`.
 
 **Segregation of duties**: `canReview(preparerMembershipId,
 reviewerMembershipId)` in the same file refuses self-review. It's not wired
@@ -55,9 +59,12 @@ Two independent layers, deliberately not just one:
    (there is no query function that omits the `organizationId` parameter).
 
 2. **Row Level Security** (defense-in-depth, for other access paths):
-   `os/prisma/migrations/20260819092604_enable_row_level_security/migration.sql`
-   enables RLS and adds `SELECT` policies on every tenant table, keyed off
-   `auth.uid()`. This protects any *other* route into the same database —
+   `os/prisma/migrations/20260819092604_enable_row_level_security/` and
+   `.../20260819094215_workflow_engine_rls/` enable RLS and add `SELECT`
+   policies on every tenant table (organizations, memberships, clients,
+   client_contacts, audit_events, workflow_templates, task_templates,
+   workflow_instances, tasks), keyed off `auth.uid()`. This protects any
+   *other* route into the same database —
    a browser Supabase client, Supabase's PostgREST auto-API, a future
    integration — none of which this app currently uses for data queries,
    but which would otherwise have no tenant boundary at all if ever added
@@ -77,7 +84,10 @@ Two independent layers, deliberately not just one:
    session with no claim sees zero rows; and direct `INSERT`/`UPDATE`/
    `DELETE` attempts from the `authenticated` role are rejected with
    `permission denied` (no write policies are defined — RLS denies by
-   default). See `/docs/setup.md` to reproduce.
+   default). Re-verified after adding the workflow tables: a workflow
+   template, task template, workflow instance and task seeded under Org A
+   are visible only to user A, and the equivalent Org B rows only to user
+   B. See `/docs/setup.md` to reproduce.
 
    One non-obvious bug this caught: a naive policy on `memberships` that
    queries `memberships` again inside itself causes Postgres to report

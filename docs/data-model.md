@@ -7,17 +7,28 @@ Source of truth: `os/prisma/schema.prisma`. This document explains the
 
 ```
 Organization 1───* Membership *───1 (Supabase auth.users, by userId — no local table)
-     │                  │  ▲              ▲
-     │                  │  └── portfolioLeadId ──┐
-     │                  │  └── relationshipOwnerId┤
-     │                  │                          │
-     1                  *                          │
-     └───────────────* Client ──────────────────────┘
+     │                  │  ▲              ▲              ▲
+     │                  │  └── portfolioLeadId ──┐        └── assigneeMembershipId
+     │                  │  └── relationshipOwnerId┤                    │
+     │                  │                          │                    *
+     1                  *                          │                  Task
+     └───────────────* Client ──────────────────────┘                   1
+                          │                                             │
+                          1                                             *
+                          ├───* ClientContact                WorkflowInstance
+                          │                                             │
+                          *                                             *
+                    WorkflowInstance ─────────────────────────────────┘
+                          │                                    (also: *───1 Client)
+                          *
+              WorkflowTemplate (optional — instance may be one-off)
                           │
                           1
-                          └───* ClientContact
+                          └───* TaskTemplate
 
 Organization 1───* AuditEvent *───0..1 Membership (actor)
+Organization 1───* WorkflowTemplate
+Organization 1───* WorkflowInstance
 ```
 
 ## Why these five tables and not the full section-20 list
@@ -79,8 +90,32 @@ banking/accounting systems) in Phase 1's Client 360 "Company profile" tab.
 ### `audit_events`
 Append-only. `AuditAction` is a closed enum extended as each module adds
 actions worth auditing (today: sign-up, membership role changes, client
-create). Never updated or deleted from application code — see
-`/docs/security.md`.
+create, workflow template/task-template creation, workflow instantiation,
+task status change, task assignment). Never updated or deleted from
+application code — see `/docs/security.md`.
+
+### `workflow_templates` / `task_templates`
+A `WorkflowTemplate` is a reusable recipe ("Monthly Management Accounts");
+its `TaskTemplate` rows are the blueprint tasks, each carrying
+`relativeDueDays` — days after whatever period the template gets
+instantiated for starts. `recurrence` (`ONE_OFF`/`WEEKLY`/`MONTHLY`/
+`QUARTERLY`/`ANNUAL`) drives `computePeriodEnd()`
+(`src/lib/workflow/period.ts`) when instantiating. `defaultAssigneeRole` on
+`TaskTemplate` is present but unused — see "Simplifications" in
+`/docs/implementation-plan.md`.
+
+### `workflow_instances` / `tasks`
+One `WorkflowInstance` is a `WorkflowTemplate` (optional — can be null for a
+one-off, template-less workflow) instantiated for one `Client` over one
+`periodStart`–`periodEnd`. `name`/`serviceBucket` are copied from the
+template at instantiation time, not joined live, so renaming or deleting a
+template never rewrites the record of what was actually delivered. Each
+`Task` belongs to exactly one instance; `status` is one of `NOT_STARTED` →
+`IN_PROGRESS`/`BLOCKED`/`AWAITING_CLIENT` → `UNDER_REVIEW` → `APPROVED` →
+`DELIVERED`. **"Overdue" is not a status** — `computeIsOverdue()`
+(`src/lib/workflow/status.ts`) derives it from `dueDate < now() &&
+status !== DELIVERED` at read time, so fixing a due date or delivering a
+task always immediately clears it rather than leaving a stale flag.
 
 ## Conventions
 
@@ -106,13 +141,20 @@ create). Never updated or deleted from application code — see
 
 ## Migrations
 
-`os/prisma/migrations/` — two so far:
+`os/prisma/migrations/` — four so far:
 
-1. `20260819092543_init` — the tables above.
-2. `20260819092604_enable_row_level_security` — RLS policies (see
-   `/docs/security.md`). Deliberately a separate migration from `init` so the
-   schema and its security policies have independent, reviewable history.
+1. `20260819092543_init` — organizations, memberships, clients,
+   client_contacts, audit_events.
+2. `20260819092604_enable_row_level_security` — RLS policies for the above
+   (see `/docs/security.md`). Deliberately a separate migration from `init`
+   so the schema and its security policies have independent, reviewable
+   history.
+3. `20260819094204_workflow_engine` — workflow_templates, task_templates,
+   workflow_instances, tasks.
+4. `20260819094215_workflow_engine_rls` — RLS policies for the workflow
+   tables, same pattern as (2).
 
-Both were generated and applied against a real local Postgres 16 instance
-during development (not just written by hand and hoped correct) — see
-`/docs/setup.md` "Verifying migrations locally" if you need to do the same.
+All four were generated and applied against a real local Postgres 16
+instance during development (not just written by hand and hoped correct) —
+see `/docs/setup.md` "Verifying migrations locally" if you need to do the
+same.

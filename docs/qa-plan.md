@@ -18,10 +18,11 @@ This document is about (1).
 |---|---|---|
 | Type safety | `npm run typecheck` (`os/`) | Passing, zero errors |
 | Lint | `npm run lint` (`os/`) | Passing, zero warnings |
-| Unit tests | `npm test` (`os/`) | 14 tests passing — RBAC matrix, segregation of duties, Zod schemas (client creation, sign-up), nav config integrity |
+| Unit tests | `npm test` (`os/`) | 42 tests passing — RBAC matrix (incl. workflow permissions), segregation of duties, Zod schemas (client, sign-up, workflow template/task-template/instantiate), nav config integrity, period-end/due-date math (incl. month/leap-year/quarter boundaries), overdue/progress derivation (incl. fake-timer clock test) |
 | Production build | `npm run build` (`os/`) | Succeeds, including without `DATABASE_URL` set (see `/docs/architecture.md` — lazy Prisma client) |
-| Database migrations | `npx prisma migrate dev` against real Postgres 16 | Both migrations apply cleanly, including through Prisma's shadow-database validation |
-| Row Level Security | Manual `psql` session, `SET ROLE authenticated` + `SET request.jwt.claim.sub` | Verified: cross-tenant isolation holds, anonymous session sees nothing, direct writes are rejected. See `/docs/security.md` and `/docs/setup.md` |
+| Database migrations | `npx prisma migrate dev` / `deploy` against real Postgres 16 | All four migrations apply cleanly, including through Prisma's shadow-database validation |
+| Seed script | `npm run db:seed` against real Postgres 16 | Runs end to end: 12 clients, 2 workflow templates, 3 workflow instances with realistic (verified by direct query) due-date/overdue spread |
+| Row Level Security | Manual `psql` session, `SET ROLE authenticated` + `SET request.jwt.claim.sub` | Verified on all 9 tenant tables (including the 4 workflow tables added this slice): cross-tenant isolation holds, anonymous session sees nothing, direct writes are rejected. See `/docs/security.md` and `/docs/setup.md` |
 | Dev server smoke test | `next dev`, `curl` against `/`, `/dashboard`, `/login` | `/` and `/dashboard` correctly redirect unauthenticated requests to `/login?next=...`; `/login` renders 200 |
 
 ## What's not verified, and why
@@ -62,13 +63,26 @@ design lands.
       function in `src/lib/queries/*.ts` (organizationId is a required,
       non-optional parameter — there's no call site that can omit it).
 - [x] **Material actions appear in the audit log with actor, time, target.**
-      `recordAuditEvent()` is called from sign-up, role change, and client
-      creation; `os/src/lib/audit.ts`.
+      `recordAuditEvent()` is called from sign-up, role change, client
+      creation, workflow template/task-template creation, workflow
+      instantiation, task status change and task assignment;
+      `os/src/lib/audit.ts`.
 - [x] **Self-review is prevented.** `canReview()`, unit tested.
-- [ ] Onboarding gates, recurring delivery, request SLAs, QA release gates,
-      multi-currency billing — all Phase 1+ features not yet built; their
-      acceptance criteria live in `/docs/implementation-plan.md` against
-      the phase that ships them.
+- [x] **Period schedules create correctly-dated work.** `computePeriodEnd`/
+      `computeTaskDueDate` unit tested for weekly/monthly/quarterly/annual
+      boundaries (including a February-in-a-non-leap-year case and a
+      month-rollover case); the seeded data's actual due dates were queried
+      back from a real database and checked by hand against expectation
+      (see `/docs/qa-plan.md` "Seed script" row above).
+- [x] **"Overdue" is derived, not stored, and clears immediately.**
+      `computeIsOverdue` unit tested including a fake-clock test that flips
+      the same task from not-overdue to overdue as `now` crosses the due
+      date, and a test that delivering a task clears it even past due.
+- [ ] Task dependencies/blocking, checklist evidence, onboarding gates,
+      request SLAs, QA release gates, multi-currency billing — all Phase 1
+      remainder / Phase 2+ features not yet built; their acceptance
+      criteria live in `/docs/implementation-plan.md` against the phase
+      that ships them.
 
 ## CI
 
